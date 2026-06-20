@@ -25,9 +25,6 @@ jobs:
           pip install requests beautifulsoup4 gspread google-auth selenium webdriver-manager gigachat
 
       - name: Run script
-        env:
-          GIGACHAT_KEY: ${{ secrets.GIGACHAT_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: python main.py
+        run: |
+          ls -la
+          python ./main.py
