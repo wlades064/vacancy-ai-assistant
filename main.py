@@ -257,7 +257,7 @@ def get_vacancy_details(url):
 
 def analyze_vacancy(title, vacancy_text):
     try:
-        giga = GigaChat(credentials=GIGACHAT_KEY, verify_ssl_certs=False)
+        giga = GigaChat(credentials=GIGACHAT_KEY, verify_ssl_certs=False, model="GigaChat")
         prompt = ANALYSIS_PROMPT.format(
             profile=CANDIDATE_PROFILE,
             vacancy_text=f"{title}\n\n{vacancy_text}"
@@ -271,7 +271,7 @@ def analyze_vacancy(title, vacancy_text):
 
 def generate_letter(title, vacancy_text):
     try:
-        giga = GigaChat(credentials=GIGACHAT_KEY, verify_ssl_certs=False)
+        giga = GigaChat(credentials=GIGACHAT_KEY, verify_ssl_certs=False, model="GigaChat")
         prompt = LETTER_PROMPT.format(
             profile=CANDIDATE_PROFILE,
             vacancy_title=title,
