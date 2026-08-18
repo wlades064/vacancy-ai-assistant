@@ -1,5 +1,8 @@
 import os
 import json
+import logging
+import re
+import unicodedata
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -15,15 +18,29 @@ from gigachat import GigaChat
 
 print("Скрипт запустился")
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 # --- Настройки из секретов GitHub ---
 SPREADSHEET_ID = "1qo851AXJysBjgl3L7LhCFt4AK74y3agelflwhTY16gY"
 GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")
+GIGACHAT_MODEL = os.environ.get("GIGACHAT_MODEL", "GigaChat-2")
+GIGACHAT_SCOPE = os.environ.get("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 
-import ssl
-ssl._create_default_https_context = ssl._create_unverified_context
+
+def require_environment_variable(name, value):
+    if not value:
+        raise RuntimeError(f"Не задана обязательная переменная окружения {name}")
+
+
+require_environment_variable("GIGACHAT_KEY", GIGACHAT_KEY)
+require_environment_variable("GOOGLE_CREDENTIALS", GOOGLE_CREDENTIALS_JSON)
 
 CANDIDATE_PROFILE = """
 Имя - Владислав
@@ -127,9 +144,7 @@ creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(SPREADSHEET_ID).sheet1
 
-headers_row = ["№", "Название", "Опыт", "Город", "Удалённо", "Дата", "Оценка", "Вердикт", "Анализ", "Письмо", "Ссылка"]
-sheet.clear()
-sheet.append_row(headers_row)
+headers_row = ["№", "Название", "Компания", "Опыт", "Город", "Удалённо", "Дата", "Оценка", "Вердикт", "Анализ", "Письмо", "Ссылка"]
 
 # --- Selenium ---
 options = Options()
@@ -163,11 +178,26 @@ exclude_keywords = [
     "1с", "внедрени", "хранилищ", "недвижимост",
     "outbound", "crm-аналитик", "первой линии", "второй линии",
     "аналитик данных", "hr-аналитик", "data analyst", "data", "портфельный",
-    "финансовый аналитик", "продуктовый аналитик", "Crypto", "Маркетинговый",
+    "финансовый аналитик", "продуктовый аналитик", "crypto", "крипто", "маркетинговый",
     "Инвестиционный", "Дизайн", "Старший", "Специалист 1-я линии поддержки", "спикер","ЭДО",
     "маркетолог", "менеджер по продажам", "продажи", "разработчик", "инженер", 
     "Младший менеджер проектов в стрим стратегической аналитики"
 ]
+
+
+def normalize_for_matching(text):
+    """Приводит текст к единому виду для надёжного поиска стоп-слов."""
+    normalized = unicodedata.normalize("NFKC", text or "").casefold().replace("ё", "е")
+    normalized = re.sub(r"[‐‑‒–—−]", "-", normalized)
+    return " ".join(normalized.split())
+
+
+normalized_exclude_keywords = [normalize_for_matching(keyword) for keyword in exclude_keywords]
+
+
+def contains_excluded_keyword(title):
+    normalized_title = normalize_for_matching(title)
+    return any(keyword in normalized_title for keyword in normalized_exclude_keywords)
 
 relevant_keywords = [
     "аналитик", "analyst", "автоматизац", "automation", "ai-агент", "ии"
@@ -235,6 +265,11 @@ def get_vacancy_details(url):
         resp = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(resp.text, "html.parser")
 
+        company = ""
+        company_block = soup.find(attrs={"data-qa": "vacancy-company-name"})
+        if company_block:
+            company = company_block.get_text(" ", strip=True)
+
         experience = ""
         exp_block = soup.find(attrs={"data-qa": "vacancy-experience"})
         if exp_block:
@@ -250,37 +285,57 @@ def get_vacancy_details(url):
         if format_block and "удал" in format_block.text.lower():
             remote = True
 
-        return experience, city, remote
+        return company, experience, city, remote
     except Exception:
-        return "", "", False
+        return "", "", "", False
 
 
-def analyze_vacancy(title, vacancy_text):
+def extract_gigachat_text(response):
+    """Извлекает текст из актуального ответа SDK с поддержкой старого контракта."""
+    messages = getattr(response, "messages", None)
+    if messages:
+        content = messages[0].content
+        if isinstance(content, str):
+            return content
+        if content:
+            text = getattr(content[0], "text", None)
+            if text:
+                return text
+
+    choices = getattr(response, "choices", None)
+    if choices:
+        return choices[0].message.content
+
+    raise RuntimeError("GigaChat вернул ответ в неизвестном формате")
+
+
+def ask_gigachat(giga, prompt):
+    response = giga.chat.create(prompt)
+    return extract_gigachat_text(response)
+
+
+def analyze_vacancy(giga, title, vacancy_text):
     try:
-        giga = GigaChat(credentials=GIGACHAT_KEY, verify_ssl_certs=False, model="GigaChat")
         prompt = ANALYSIS_PROMPT.format(
             profile=CANDIDATE_PROFILE,
             vacancy_text=f"{title}\n\n{vacancy_text}"
         )
-        response = giga.chat(prompt)
-        giga.close()
-        return response.choices[0].message.content
+        return ask_gigachat(giga, prompt)
     except Exception as e:
+        logger.exception("Ошибка анализа вакансии %r", title)
         return f"Ошибка анализа: {e}"
 
 
-def generate_letter(title, vacancy_text):
+def generate_letter(giga, title, vacancy_text):
     try:
-        giga = GigaChat(credentials=GIGACHAT_KEY, verify_ssl_certs=False, model="GigaChat")
         prompt = LETTER_PROMPT.format(
             profile=CANDIDATE_PROFILE,
             vacancy_title=title,
             vacancy_text=vacancy_text[:2000]
         )
-        response = giga.chat(prompt)
-        giga.close()
-        return response.choices[0].message.content
+        return ask_gigachat(giga, prompt)
     except Exception as e:
+        logger.exception("Ошибка генерации письма для вакансии %r", title)
         return f"Ошибка письма: {e}"
 
 
@@ -302,6 +357,38 @@ def extract_score_and_verdict(analysis_text):
 
 
 # --- Шаг 1: собираем вакансии ---
+giga = GigaChat(
+    credentials=GIGACHAT_KEY,
+    scope=GIGACHAT_SCOPE,
+    model=GIGACHAT_MODEL,
+    verify_ssl_certs=False,
+    max_retries=3,
+    retry_backoff_factor=1,
+)
+
+try:
+    available_models = giga.get_models()
+    model_ids = {model.id_ for model in available_models.data}
+    if GIGACHAT_MODEL not in model_ids:
+        raise RuntimeError(
+            f"Модель {GIGACHAT_MODEL!r} недоступна для этого ключа. "
+            f"Доступные модели: {', '.join(sorted(model_ids))}"
+        )
+    logger.info(
+        "GigaChat подключён, модель для генерации: %s, доступно моделей: %s",
+        GIGACHAT_MODEL,
+        len(available_models.data),
+    )
+except Exception:
+    logger.exception(
+        "Не удалось подключиться к GigaChat. Проверьте GIGACHAT_KEY, "
+        "GIGACHAT_SCOPE и доступность модели %s",
+        GIGACHAT_MODEL,
+    )
+    giga.close()
+    driver.quit()
+    raise
+
 all_vacancies = []
 seen_urls = set()
 
@@ -326,13 +413,13 @@ for query in search_queries:
         for vacancy in vacancies:
             href = vacancy["href"]
             title = vacancy.text.strip()
-            title_lower = title.lower()
+            title_normalized = normalize_for_matching(title)
 
             if "adsrv.hh.ru" in href:
                 continue
-            if not any(kw in title_lower for kw in relevant_keywords):
+            if not any(normalize_for_matching(kw) in title_normalized for kw in relevant_keywords):
                 continue
-            if any(kw in title_lower for kw in exclude_keywords):
+            if contains_excluded_keyword(title):
                 continue
 
             if href.startswith("http"):
@@ -351,10 +438,11 @@ print("Проверяю каждую вакансию...\n")
 
 # --- Шаг 2: фильтруем и анализируем ---
 filtered = []
+analysis_failures = 0
 week_ago = datetime.now() - timedelta(days=7)
 
 for i, v in enumerate(all_vacancies):
-    experience, city, remote = get_vacancy_details(v["url"])
+    company, experience, city, remote = get_vacancy_details(v["url"])
 
     if "3–6" in experience or "6 лет" in experience or "более 6" in experience:
         continue
@@ -370,14 +458,17 @@ for i, v in enumerate(all_vacancies):
 
     print(f"  Анализирую: {v['title']}")
 
-    analysis = analyze_vacancy(v["title"], vacancy_text)
+    analysis = analyze_vacancy(giga, v["title"], vacancy_text)
+    if analysis.startswith("Ошибка анализа:"):
+        analysis_failures += 1
     score, verdict = extract_score_and_verdict(analysis)
 
     letter = ""
     if verdict == "ДА":
-        letter = generate_letter(v["title"], vacancy_text)
+        letter = generate_letter(giga, v["title"], vacancy_text)
 
     v["experience"] = experience if experience else "не указан"
+    v["company"] = company if company else "не указана"
     v["city"] = city if city else "не указан"
     v["remote"] = remote
     v["published_at"] = pub_date_str
@@ -392,6 +483,13 @@ for i, v in enumerate(all_vacancies):
         print(f"  Обработано {i + 1}/{len(all_vacancies)}...")
 
 driver.quit()
+giga.close()
+
+if filtered and analysis_failures == len(filtered):
+    raise RuntimeError(
+        "GigaChat не смог проанализировать ни одной вакансии. "
+        "Google Sheets оставлена без изменений; смотрите ошибки выше."
+    )
 
 # --- Шаг 3: сортировка ---
 filtered.sort(key=lambda x: x["pub_date"] or datetime.min, reverse=True)
@@ -404,6 +502,7 @@ for i, v in enumerate(filtered, 1):
     rows.append([
         i,
         v["title"],
+        v["company"],
         v["experience"],
         v["city"],
         "да" if v["remote"] else "нет",
@@ -415,8 +514,10 @@ for i, v in enumerate(filtered, 1):
         v["url"]
     ])
 
+sheet.clear()
+sheet.append_row(headers_row)
 if rows:
-    sheet.append_rows(rows)
+    sheet.append_rows(rows, value_input_option="RAW")
 
 print(f"Сохранено {len(filtered)} вакансий в Google Sheets")
 
@@ -424,11 +525,12 @@ print(f"Сохранено {len(filtered)} вакансий в Google Sheets")
 message = f"✅ Поиск вакансий завершён!\n\nНайдено подходящих: {len(filtered)}\n\nТаблица: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
 
 try:
-    requests.post(
+    telegram_response = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         data={"chat_id": TELEGRAM_CHAT_ID, "text": message},
         timeout=15
     )
+    telegram_response.raise_for_status()
     print("Уведомление отправлено в Telegram")
 except Exception as e:
     print(f"Не удалось отправить в Telegram: {e}")

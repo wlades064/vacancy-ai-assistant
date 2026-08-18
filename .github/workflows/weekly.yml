@@ -22,8 +22,7 @@ jobs:
         uses: browser-actions/setup-chrome@v1
 
       - name: Install dependencies
-        run: |
-          pip install requests beautifulsoup4 gspread google-auth selenium webdriver-manager gigachat
+        run: pip install --requirement requirements.txt
 
       - name: Debug files
         run: |
@@ -37,6 +36,8 @@ jobs:
       - name: Run script
         env:
           GIGACHAT_KEY: ${{ secrets.GIGACHAT_KEY }}
+          GIGACHAT_MODEL: GigaChat-2
+          GIGACHAT_SCOPE: GIGACHAT_API_PERS
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
