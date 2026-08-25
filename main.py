@@ -29,6 +29,8 @@ SPREADSHEET_ID = "1qo851AXJysBjgl3L7LhCFt4AK74y3agelflwhTY16gY"
 GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")
 GIGACHAT_MODEL = os.environ.get("GIGACHAT_MODEL", "GigaChat-2")
 GIGACHAT_SCOPE = os.environ.get("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+MIN_COLLECTED_VACANCIES = int(os.environ.get("MIN_COLLECTED_VACANCIES", "30"))
+MAX_HH_FAILURE_RATE = float(os.environ.get("MAX_HH_FAILURE_RATE", "0.35"))
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
@@ -156,6 +158,52 @@ driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), opti
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
+http = requests.Session()
+http.headers.update(headers)
+
+
+def get_hh_page(url, params=None, attempts=3):
+    """Загружает страницу hh.ru с повторами при временной сетевой ошибке."""
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = http.get(url, params=params, timeout=(15, 30))
+            response.raise_for_status()
+            return response
+        except requests.RequestException as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            delay = 10 * (2 ** (attempt - 1))
+            logger.warning(
+                "Ошибка hh.ru, попытка %s/%s: %s. Повтор через %s сек.",
+                attempt,
+                attempts,
+                error,
+                delay,
+            )
+            time.sleep(delay)
+    raise last_error
+
+
+def call_with_retry(operation, description, attempts=4):
+    """Повторяет операцию с внешним сервисом при временном сбое."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception:
+            if attempt == attempts:
+                raise
+            delay = 5 * (2 ** (attempt - 1))
+            logger.warning(
+                "%s: временная ошибка, попытка %s/%s. Повтор через %s сек.",
+                description,
+                attempt,
+                attempts,
+                delay,
+                exc_info=True,
+            )
+            time.sleep(delay)
 
 search_queries = [
     "бизнес аналитик",
@@ -262,7 +310,7 @@ def get_vacancy_date_and_text(url):
 
 def get_vacancy_details(url):
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = get_hh_page(url, attempts=2)
         soup = BeautifulSoup(resp.text, "html.parser")
 
         company = ""
@@ -285,9 +333,10 @@ def get_vacancy_details(url):
         if format_block and "удал" in format_block.text.lower():
             remote = True
 
-        return company, experience, city, remote
+        return company, experience, city, remote, True
     except Exception:
-        return "", "", "", False
+        logger.exception("Не удалось получить детали вакансии %s", url)
+        return "", "", "", False, False
 
 
 def extract_gigachat_text(response):
@@ -391,16 +440,21 @@ except Exception:
 
 all_vacancies = []
 seen_urls = set()
+search_pages_attempted = 0
+search_pages_succeeded = 0
+search_pages_failed = 0
 
 for query in search_queries:
     print(f"Ищу: {query}")
     for page in range(0, 5):
         params = {"text": query, "area": 113, "host": "hh.ru", "page": page}
+        search_pages_attempted += 1
         try:
-            response = requests.get("https://hh.ru/search/vacancy", headers=headers, params=params, timeout=15)
+            response = get_hh_page("https://hh.ru/search/vacancy", params=params)
+            search_pages_succeeded += 1
         except Exception as e:
+            search_pages_failed += 1
             print(f"  Ошибка запроса: {e}")
-            time.sleep(10)
             continue
         soup = BeautifulSoup(response.text, "html.parser")
         vacancies = soup.find_all("a", attrs={"data-qa": "serp-item__title"})
@@ -434,15 +488,36 @@ for query in search_queries:
         time.sleep(1)
 
 print(f"\nНайдено до фильтрации: {len(all_vacancies)}")
+failure_rate = search_pages_failed / search_pages_attempted if search_pages_attempted else 1
+logger.info(
+    "Страницы поиска hh.ru: успешно %s, с ошибкой %s, доля ошибок %.1f%%",
+    search_pages_succeeded,
+    search_pages_failed,
+    failure_rate * 100,
+)
+if len(all_vacancies) < MIN_COLLECTED_VACANCIES or failure_rate > MAX_HH_FAILURE_RATE:
+    driver.quit()
+    giga.close()
+    raise RuntimeError(
+        "Сбор hh.ru неполный: найдено "
+        f"{len(all_vacancies)} вакансий, ошибок страниц {failure_rate:.1%}. "
+        "Google Sheets оставлена без изменений."
+    )
 print("Проверяю каждую вакансию...\n")
 
 # --- Шаг 2: фильтруем и анализируем ---
 filtered = []
 analysis_failures = 0
+details_attempted = 0
+details_failed = 0
 week_ago = datetime.now() - timedelta(days=7)
 
 for i, v in enumerate(all_vacancies):
-    company, experience, city, remote = get_vacancy_details(v["url"])
+    details_attempted += 1
+    company, experience, city, remote, details_ok = get_vacancy_details(v["url"])
+    if not details_ok:
+        details_failed += 1
+        continue
 
     if "3–6" in experience or "6 лет" in experience or "более 6" in experience:
         continue
@@ -485,6 +560,19 @@ for i, v in enumerate(all_vacancies):
 driver.quit()
 giga.close()
 
+details_failure_rate = details_failed / details_attempted if details_attempted else 1
+logger.info(
+    "Детали вакансий hh.ru: успешно %s, с ошибкой %s, доля ошибок %.1f%%",
+    details_attempted - details_failed,
+    details_failed,
+    details_failure_rate * 100,
+)
+if details_failure_rate > MAX_HH_FAILURE_RATE:
+    raise RuntimeError(
+        f"Не удалось загрузить детали {details_failure_rate:.1%} вакансий. "
+        "Google Sheets оставлена без изменений."
+    )
+
 if filtered and analysis_failures == len(filtered):
     raise RuntimeError(
         "GigaChat не смог проанализировать ни одной вакансии. "
@@ -514,10 +602,29 @@ for i, v in enumerate(filtered, 1):
         v["url"]
     ])
 
-sheet.clear()
-sheet.append_row(headers_row)
-if rows:
-    sheet.append_rows(rows, value_input_option="RAW")
+table_values = [headers_row, *rows]
+existing_row_count = len(
+    call_with_retry(sheet.get_all_values, "Чтение Google Sheets")
+)
+call_with_retry(
+    lambda: sheet.update(
+        values=table_values,
+        range_name="A1",
+        value_input_option="RAW",
+    ),
+    "Запись Google Sheets",
+)
+
+if existing_row_count > len(table_values):
+    try:
+        call_with_retry(
+            lambda: sheet.batch_clear(
+                [f"A{len(table_values) + 1}:L{existing_row_count}"]
+            ),
+            "Очистка старых строк Google Sheets",
+        )
+    except Exception:
+        logger.exception("Новые данные записаны, но старые лишние строки не очищены")
 
 print(f"Сохранено {len(filtered)} вакансий в Google Sheets")
 
