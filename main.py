@@ -16,9 +16,12 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from gigachat import GigaChat
 from vacancy_filters import (
+    contains_excluded_company,
     contains_ai_keyword,
     contains_excluded_keyword,
     contains_relevant_keyword,
+    deduplicate_company_titles,
+    is_excluded_experience,
     is_remote_text,
 )
 
@@ -456,6 +459,8 @@ for query in search_queries:
             title = vacancy.text.strip()
             card = vacancy.find_parent(attrs={"data-qa": "vacancy-serp__vacancy"})
             remote_hint = is_remote_text(card.get_text(" ", strip=True)) if card else False
+            city_block = card.find(attrs={"data-qa": "vacancy-serp__vacancy-address"}) if card else None
+            city_hint = city_block.get_text(" ", strip=True).lower() if city_block else ""
             matched_ai_query = query in ai_search_queries
 
             if "adsrv.hh.ru" in href:
@@ -479,6 +484,7 @@ for query in search_queries:
                     "title": title,
                     "url": url,
                     "remote_hint": remote_hint,
+                    "city_hint": city_hint,
                     "matched_ai_query": matched_ai_query,
                 }
                 all_vacancies.append(item)
@@ -513,6 +519,7 @@ print("Проверяю каждую вакансию...\n")
 
 # --- Шаг 2: фильтруем и анализируем ---
 filtered = []
+analysis_candidates = []
 analysis_failures = 0
 details_attempted = 0
 details_failed = 0
@@ -533,7 +540,15 @@ for i, v in enumerate(all_vacancies):
             ai_filter_stats["ошибка деталей"] += 1
         continue
 
-    if "3–6" in experience or "6 лет" in experience or "более 6" in experience:
+    city = city or v["city_hint"]
+
+    if contains_excluded_company(company):
+        filter_stats["стоп-компания"] += 1
+        if is_ai_candidate:
+            ai_filter_stats["стоп-компания"] += 1
+        continue
+
+    if is_excluded_experience(experience):
         filter_stats["опыт 3+ лет"] += 1
         if is_ai_candidate:
             ai_filter_stats["опыт 3+ лет"] += 1
@@ -555,8 +570,28 @@ for i, v in enumerate(all_vacancies):
             ai_filter_stats["старше 7 дней"] += 1
         continue
 
+    v["experience"] = experience if experience else "не указан"
+    v["company"] = company if company else "не указана"
+    v["city"] = city if city else "не указан"
+    v["remote"] = remote
+    v["published_at"] = pub_date_str
+    v["pub_date"] = pub_date
+    v["vacancy_text"] = vacancy_text
+    v["is_ai_candidate"] = is_ai_candidate
+    analysis_candidates.append(v)
+
+deduplicated_candidates = deduplicate_company_titles(analysis_candidates)
+selected_urls = {vacancy["url"] for vacancy in deduplicated_candidates}
+for vacancy in analysis_candidates:
+    if vacancy["url"] not in selected_urls:
+        filter_stats["дубликат компании и названия"] += 1
+        if vacancy["is_ai_candidate"]:
+            ai_filter_stats["дубликат компании и названия"] += 1
+
+for i, v in enumerate(deduplicated_candidates):
     print(f"  Анализирую: {v['title']}")
 
+    vacancy_text = v.pop("vacancy_text")
     analysis = analyze_vacancy(giga, v["title"], vacancy_text)
     if analysis.startswith("Ошибка анализа:"):
         analysis_failures += 1
@@ -566,23 +601,17 @@ for i, v in enumerate(all_vacancies):
     if verdict == "ДА":
         letter = generate_letter(giga, v["title"], vacancy_text)
 
-    v["experience"] = experience if experience else "не указан"
-    v["company"] = company if company else "не указана"
-    v["city"] = city if city else "не указан"
-    v["remote"] = remote
-    v["published_at"] = pub_date_str
-    v["pub_date"] = pub_date
     v["score"] = score
     v["verdict"] = verdict
     v["analysis"] = analysis
     v["letter"] = letter
     filtered.append(v)
     filter_stats["передано в анализ"] += 1
-    if is_ai_candidate:
+    if v.pop("is_ai_candidate"):
         ai_filter_stats["передано в анализ"] += 1
 
     if (i + 1) % 10 == 0:
-        print(f"  Обработано {i + 1}/{len(all_vacancies)}...")
+        print(f"  Обработано {i + 1}/{len(deduplicated_candidates)}...")
 
 driver.quit()
 giga.close()

@@ -14,6 +14,21 @@ EXCLUDE_KEYWORDS = [
     "младший менеджер проектов в стрим стратегической аналитики",
     "цфт", "специалист по аналитике и контролю качества", "экономист",
     "битрикс 24", "битрикс24", "риск", "китайск",
+    "контент", "financial", "менеджер поддержки", "директолог",
+    "специалист по личному бренду", "seo", "key account manager", "тувинск",
+]
+
+EXCLUDE_COMPANIES = ["aston", "астон"]
+
+MOSCOW_OR_SAMARA_TIME_CITIES = [
+    "астрахань", "брянск", "великий новгород", "владимир", "волгоград",
+    "вологда", "воронеж", "иваново", "ижевск", "калуга", "казань",
+    "киров", "кострома", "краснодар", "курск", "липецк", "москва",
+    "мурманск", "набережные челны", "нижний новгород", "орел", "орёл",
+    "пенза", "петрозаводск", "псков", "ростов-на-дону", "рязань",
+    "самара", "санкт-петербург", "саранск", "саратов", "севастополь",
+    "смоленск", "сочи", "ставрополь", "тамбов", "тверь", "тула",
+    "ульяновск", "чебоксары", "череповец", "ярославль",
 ]
 
 RELEVANT_KEYWORDS = [
@@ -42,6 +57,53 @@ NORMALIZED_EXCLUDE_KEYWORDS = [
 def contains_excluded_keyword(title):
     normalized_title = normalize_for_matching(title)
     return any(keyword in normalized_title for keyword in NORMALIZED_EXCLUDE_KEYWORDS)
+
+
+def contains_excluded_company(company):
+    normalized_company = normalize_for_matching(company)
+    return any(
+        normalize_for_matching(keyword) in normalized_company
+        for keyword in EXCLUDE_COMPANIES
+    )
+
+
+def is_excluded_experience(experience):
+    normalized_experience = normalize_for_matching(experience)
+    three_to_six = re.search(
+        r"(?:от\s*)?3(?:\s*[-]\s*6|\s*х?\s*до\s*6)\s*(?:лет|года)?",
+        normalized_experience,
+    )
+    return bool(three_to_six) or "более 6" in normalized_experience or "6 лет" in normalized_experience
+
+
+def preferred_city_rank(city):
+    normalized_city = normalize_for_matching(city)
+    if "саратов" in normalized_city:
+        return 0
+    if any(city_name in normalized_city for city_name in MOSCOW_OR_SAMARA_TIME_CITIES):
+        return 1
+    return 2
+
+
+def deduplicate_company_titles(vacancies):
+    best_index_by_key = {}
+
+    for index, vacancy in enumerate(vacancies):
+        title = normalize_for_matching(vacancy.get("title"))
+        company = normalize_for_matching(vacancy.get("company"))
+        has_company = company and company != "не указана"
+        key = (title, company) if has_company else (title, vacancy.get("url", index))
+        current_index = best_index_by_key.get(key)
+        if current_index is None:
+            best_index_by_key[key] = index
+            continue
+        if preferred_city_rank(vacancy.get("city")) < preferred_city_rank(
+            vacancies[current_index].get("city")
+        ):
+            best_index_by_key[key] = index
+
+    selected_indexes = set(best_index_by_key.values())
+    return [vacancy for index, vacancy in enumerate(vacancies) if index in selected_indexes]
 
 
 def contains_ai_keyword(title):
