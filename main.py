@@ -2,7 +2,6 @@ import os
 import json
 import logging
 import re
-import unicodedata
 from collections import Counter
 import requests
 from bs4 import BeautifulSoup
@@ -16,6 +15,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from gigachat import GigaChat
+from vacancy_filters import (
+    contains_ai_keyword,
+    contains_excluded_keyword,
+    contains_relevant_keyword,
+    is_remote_text,
+)
 
 print("Скрипт запустился")
 
@@ -230,58 +235,6 @@ ai_search_queries = [
 
 search_queries = [*analyst_search_queries, *ai_search_queries]
 
-exclude_keywords = [
-    "senior", "сеньор", "lead", "лид", "руководитель",
-    "главный", "ведущий", "principal", "head", "архитектор",
-    "1с", "внедрени", "хранилищ", "недвижимост",
-    "outbound", "crm-аналитик", "первой линии", "второй линии",
-    "аналитик данных", "hr-аналитик", "data analyst", "data", "портфельный",
-    "финансовый аналитик", "продуктовый аналитик", "crypto", "крипто", "маркетинговый",
-    "Инвестиционный", "Дизайн", "Старший", "Специалист 1-я линии поддержки", "спикер","ЭДО",
-    "маркетолог", "менеджер по продажам", "продажи",
-    "Младший менеджер проектов в стрим стратегической аналитики"
-]
-
-
-def normalize_for_matching(text):
-    """Приводит текст к единому виду для надёжного поиска стоп-слов."""
-    normalized = unicodedata.normalize("NFKC", text or "").casefold().replace("ё", "е")
-    normalized = re.sub(r"[‐‑‒–—−]", "-", normalized)
-    return " ".join(normalized.split())
-
-
-normalized_exclude_keywords = [normalize_for_matching(keyword) for keyword in exclude_keywords]
-
-
-def contains_excluded_keyword(title):
-    normalized_title = normalize_for_matching(title)
-    return any(keyword in normalized_title for keyword in normalized_exclude_keywords)
-
-relevant_keywords = [
-    "аналитик", "analyst", "автоматизац", "automation", "ai-агент", "ии"
-]
-
-ai_keywords = [
-    "ai-агент", "ai агент", "ai assistant", "ai specialist", "ai engineer",
-    "aiops", "genai", "нейросет", "искусственн интеллект", "llm", "gpt",
-    "n8n", "mcp", "rag", "machine learning"
-]
-
-
-def contains_ai_keyword(title):
-    normalized_title = normalize_for_matching(title)
-    if any(keyword in normalized_title for keyword in ai_keywords):
-        return True
-    return bool(re.search(r"(?<![a-zа-я0-9])(?:ai|ml)(?![a-zа-я0-9])", normalized_title))
-
-
-def contains_relevant_keyword(title):
-    normalized_title = normalize_for_matching(title)
-    return contains_ai_keyword(title) or any(
-        normalize_for_matching(keyword) in normalized_title
-        for keyword in relevant_keywords
-    )
-
 local_cities = ["саратов", "энгельс"]
 
 months_map = {
@@ -361,7 +314,7 @@ def get_vacancy_details(url):
 
         remote = False
         format_block = soup.find(attrs={"data-qa": "work-formats-text"})
-        if format_block and "удал" in format_block.text.lower():
+        if format_block and is_remote_text(format_block.text):
             remote = True
 
         return company, experience, city, remote, True
@@ -471,6 +424,7 @@ except Exception:
 
 all_vacancies = []
 seen_urls = set()
+vacancies_by_url = {}
 search_pages_attempted = 0
 search_pages_succeeded = 0
 search_pages_failed = 0
@@ -500,6 +454,9 @@ for query in search_queries:
         for vacancy in vacancies:
             href = vacancy["href"]
             title = vacancy.text.strip()
+            card = vacancy.find_parent(attrs={"data-qa": "vacancy-serp__vacancy"})
+            remote_hint = is_remote_text(card.get_text(" ", strip=True)) if card else False
+            matched_ai_query = query in ai_search_queries
 
             if "adsrv.hh.ru" in href:
                 collection_stats["реклама"] += 1
@@ -518,9 +475,19 @@ for query in search_queries:
 
             if url not in seen_urls:
                 seen_urls.add(url)
-                all_vacancies.append({"title": title, "url": url})
+                item = {
+                    "title": title,
+                    "url": url,
+                    "remote_hint": remote_hint,
+                    "matched_ai_query": matched_ai_query,
+                }
+                all_vacancies.append(item)
+                vacancies_by_url[url] = item
                 collection_stats["собрано"] += 1
             else:
+                existing = vacancies_by_url[url]
+                existing["remote_hint"] = existing["remote_hint"] or remote_hint
+                existing["matched_ai_query"] = existing["matched_ai_query"] or matched_ai_query
                 collection_stats["дубликат"] += 1
 
         time.sleep(1)
@@ -550,29 +517,42 @@ analysis_failures = 0
 details_attempted = 0
 details_failed = 0
 filter_stats = Counter()
+ai_filter_stats = Counter()
 week_ago = datetime.now() - timedelta(days=7)
 
 for i, v in enumerate(all_vacancies):
+    is_ai_candidate = v["matched_ai_query"] or contains_ai_keyword(v["title"])
+    if is_ai_candidate:
+        ai_filter_stats["собрано"] += 1
     details_attempted += 1
     company, experience, city, remote, details_ok = get_vacancy_details(v["url"])
     if not details_ok:
         details_failed += 1
         filter_stats["ошибка деталей"] += 1
+        if is_ai_candidate:
+            ai_filter_stats["ошибка деталей"] += 1
         continue
 
     if "3–6" in experience or "6 лет" in experience or "более 6" in experience:
         filter_stats["опыт 3+ лет"] += 1
+        if is_ai_candidate:
+            ai_filter_stats["опыт 3+ лет"] += 1
         continue
 
+    remote = remote or v["remote_hint"]
     is_local = any(c in city for c in local_cities)
     if not is_local and not remote:
         filter_stats["не удалённо и не локально"] += 1
+        if is_ai_candidate:
+            ai_filter_stats["не удалённо и не локально"] += 1
         continue
 
     pub_date, pub_date_str, vacancy_text = get_vacancy_date_and_text(v["url"])
 
     if pub_date and pub_date < week_ago:
         filter_stats["старше 7 дней"] += 1
+        if is_ai_candidate:
+            ai_filter_stats["старше 7 дней"] += 1
         continue
 
     print(f"  Анализирую: {v['title']}")
@@ -598,6 +578,8 @@ for i, v in enumerate(all_vacancies):
     v["letter"] = letter
     filtered.append(v)
     filter_stats["передано в анализ"] += 1
+    if is_ai_candidate:
+        ai_filter_stats["передано в анализ"] += 1
 
     if (i + 1) % 10 == 0:
         print(f"  Обработано {i + 1}/{len(all_vacancies)}...")
@@ -613,6 +595,7 @@ logger.info(
     details_failure_rate * 100,
 )
 logger.info("Вторичная фильтрация: %s", dict(filter_stats))
+logger.info("AI-воронка: %s", dict(ai_filter_stats))
 if details_failure_rate > MAX_HH_FAILURE_RATE:
     raise RuntimeError(
         f"Не удалось загрузить детали {details_failure_rate:.1%} вакансий. "
