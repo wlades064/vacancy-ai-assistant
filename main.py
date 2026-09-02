@@ -15,6 +15,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from gigachat import GigaChat
+from habr_source import parse_habr_search_page, parse_habr_vacancy_text
 from vacancy_filters import (
     contains_excluded_company,
     contains_ai_keyword,
@@ -40,6 +41,8 @@ GIGACHAT_MODEL = os.environ.get("GIGACHAT_MODEL", "GigaChat-2")
 GIGACHAT_SCOPE = os.environ.get("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
 MIN_COLLECTED_VACANCIES = int(os.environ.get("MIN_COLLECTED_VACANCIES", "30"))
 MAX_HH_FAILURE_RATE = float(os.environ.get("MAX_HH_FAILURE_RATE", "0.35"))
+HABR_ENABLED = os.environ.get("HABR_ENABLED", "true").casefold() not in {"0", "false", "no"}
+HABR_PAGES_PER_QUERY = max(1, int(os.environ.get("HABR_PAGES_PER_QUERY", "2")))
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
@@ -155,7 +158,7 @@ creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(SPREADSHEET_ID).sheet1
 
-headers_row = ["№", "Название", "Компания", "Опыт", "Город", "Удалённо", "Дата", "Оценка", "Вердикт", "Анализ", "Письмо", "Ссылка"]
+headers_row = ["№", "Название", "Компания", "Опыт", "Город", "Удалённо", "Источник", "Дата", "Оценка", "Вердикт", "Анализ", "Письмо", "Ссылка"]
 
 # --- Selenium ---
 options = Options()
@@ -186,6 +189,30 @@ def get_hh_page(url, params=None, attempts=3):
             delay = 10 * (2 ** (attempt - 1))
             logger.warning(
                 "Ошибка hh.ru, попытка %s/%s: %s. Повтор через %s сек.",
+                attempt,
+                attempts,
+                error,
+                delay,
+            )
+            time.sleep(delay)
+    raise last_error
+
+
+def get_habr_page(url, params=None, attempts=3):
+    """Загружает публичную страницу Habr Career с повторами."""
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = http.get(url, params=params, timeout=(15, 30))
+            response.raise_for_status()
+            return response
+        except requests.RequestException as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            delay = 5 * (2 ** (attempt - 1))
+            logger.warning(
+                "Ошибка Habr Career, попытка %s/%s: %s. Повтор через %s сек.",
                 attempt,
                 attempts,
                 error,
@@ -237,6 +264,20 @@ ai_search_queries = [
 ]
 
 search_queries = [*analyst_search_queries, *ai_search_queries]
+
+habr_analyst_search_queries = [
+    "бизнес аналитик",
+    "системный аналитик",
+    "junior аналитик",
+]
+
+habr_ai_search_queries = [
+    "AI автоматизация",
+    "специалист по ИИ",
+    "LLM",
+]
+
+habr_search_queries = [*habr_analyst_search_queries, *habr_ai_search_queries]
 
 local_cities = ["саратов", "энгельс"]
 
@@ -483,8 +524,13 @@ for query in search_queries:
                 item = {
                     "title": title,
                     "url": url,
+                    "source": "hh.ru",
                     "remote_hint": remote_hint,
                     "city_hint": city_hint,
+                    "company_hint": "",
+                    "experience_hint": "",
+                    "published_at_hint": "не указана",
+                    "pub_date_hint": None,
                     "matched_ai_query": matched_ai_query,
                 }
                 all_vacancies.append(item)
@@ -515,6 +561,67 @@ if len(all_vacancies) < MIN_COLLECTED_VACANCIES or failure_rate > MAX_HH_FAILURE
         f"{len(all_vacancies)} вакансий, ошибок страниц {failure_rate:.1%}. "
         "Google Sheets оставлена без изменений."
     )
+
+habr_pages_attempted = 0
+habr_pages_succeeded = 0
+habr_pages_failed = 0
+habr_collection_stats = Counter()
+
+if HABR_ENABLED:
+    for query in habr_search_queries:
+        print(f"Ищу на Habr Career: {query}")
+        for page in range(1, HABR_PAGES_PER_QUERY + 1):
+            habr_pages_attempted += 1
+            try:
+                response = get_habr_page(
+                    "https://career.habr.com/vacancies",
+                    params={"q": query, "sort": "date", "type": "all", "page": page},
+                )
+                habr_pages_succeeded += 1
+            except Exception as error:
+                habr_pages_failed += 1
+                logger.warning("Не удалось загрузить Habr Career: %s", error)
+                continue
+
+            vacancies = parse_habr_search_page(response.text)
+            print(f"  Страница {page}: {len(vacancies)} вакансий")
+            if not vacancies:
+                break
+
+            for vacancy in vacancies:
+                title = vacancy["title"]
+                if not contains_relevant_keyword(title):
+                    habr_collection_stats["нет релевантных слов"] += 1
+                    continue
+                if contains_excluded_keyword(title):
+                    habr_collection_stats["стоп-слово"] += 1
+                    continue
+
+                url = vacancy["url"]
+                vacancy["matched_ai_query"] = query in habr_ai_search_queries
+                if url not in seen_urls:
+                    seen_urls.add(url)
+                    all_vacancies.append(vacancy)
+                    vacancies_by_url[url] = vacancy
+                    habr_collection_stats["собрано"] += 1
+                else:
+                    existing = vacancies_by_url[url]
+                    existing["matched_ai_query"] = (
+                        existing["matched_ai_query"] or vacancy["matched_ai_query"]
+                    )
+                    habr_collection_stats["дубликат"] += 1
+
+            time.sleep(1)
+
+    logger.info(
+        "Habr Career: страниц успешно %s, с ошибкой %s, фильтрация %s",
+        habr_pages_succeeded,
+        habr_pages_failed,
+        dict(habr_collection_stats),
+    )
+    if habr_pages_attempted and not habr_pages_succeeded:
+        logger.warning("Habr Career недоступен, поиск продолжен только с hh.ru")
+
 print("Проверяю каждую вакансию...\n")
 
 # --- Шаг 2: фильтруем и анализируем ---
@@ -523,6 +630,8 @@ analysis_candidates = []
 analysis_failures = 0
 details_attempted = 0
 details_failed = 0
+habr_details_attempted = 0
+habr_details_failed = 0
 filter_stats = Counter()
 ai_filter_stats = Counter()
 week_ago = datetime.now() - timedelta(days=7)
@@ -531,16 +640,23 @@ for i, v in enumerate(all_vacancies):
     is_ai_candidate = v["matched_ai_query"] or contains_ai_keyword(v["title"])
     if is_ai_candidate:
         ai_filter_stats["собрано"] += 1
-    details_attempted += 1
-    company, experience, city, remote, details_ok = get_vacancy_details(v["url"])
-    if not details_ok:
-        details_failed += 1
-        filter_stats["ошибка деталей"] += 1
-        if is_ai_candidate:
-            ai_filter_stats["ошибка деталей"] += 1
-        continue
 
-    city = city or v["city_hint"]
+    if v["source"] == "Habr Career":
+        company = v["company_hint"]
+        experience = v["experience_hint"]
+        city = v["city_hint"]
+        remote = v["remote_hint"]
+    else:
+        details_attempted += 1
+        company, experience, city, remote, details_ok = get_vacancy_details(v["url"])
+        if not details_ok:
+            details_failed += 1
+            filter_stats["ошибка деталей"] += 1
+            if is_ai_candidate:
+                ai_filter_stats["ошибка деталей"] += 1
+            continue
+        city = city or v["city_hint"]
+        remote = remote or v["remote_hint"]
 
     if contains_excluded_company(company):
         filter_stats["стоп-компания"] += 1
@@ -554,15 +670,31 @@ for i, v in enumerate(all_vacancies):
             ai_filter_stats["опыт 3+ лет"] += 1
         continue
 
-    remote = remote or v["remote_hint"]
-    is_local = any(c in city for c in local_cities)
+    is_local = any(c in city.casefold() for c in local_cities)
     if not is_local and not remote:
         filter_stats["не удалённо и не локально"] += 1
         if is_ai_candidate:
             ai_filter_stats["не удалённо и не локально"] += 1
         continue
 
-    pub_date, pub_date_str, vacancy_text = get_vacancy_date_and_text(v["url"])
+    if v["source"] == "Habr Career":
+        habr_details_attempted += 1
+        try:
+            response = get_habr_page(v["url"], attempts=2)
+            vacancy_text = parse_habr_vacancy_text(response.text)
+            if not vacancy_text:
+                raise ValueError("на странице нет описания вакансии")
+        except Exception as error:
+            habr_details_failed += 1
+            logger.warning("Не удалось получить детали Habr Career %s: %s", v["url"], error)
+            filter_stats["ошибка деталей Habr"] += 1
+            if is_ai_candidate:
+                ai_filter_stats["ошибка деталей Habr"] += 1
+            continue
+        pub_date = v["pub_date_hint"]
+        pub_date_str = v["published_at_hint"]
+    else:
+        pub_date, pub_date_str, vacancy_text = get_vacancy_date_and_text(v["url"])
 
     if pub_date and pub_date < week_ago:
         filter_stats["старше 7 дней"] += 1
@@ -623,6 +755,11 @@ logger.info(
     details_failed,
     details_failure_rate * 100,
 )
+logger.info(
+    "Детали Habr Career: успешно %s, с ошибкой %s",
+    habr_details_attempted - habr_details_failed,
+    habr_details_failed,
+)
 logger.info("Вторичная фильтрация: %s", dict(filter_stats))
 logger.info("AI-воронка: %s", dict(ai_filter_stats))
 if details_failure_rate > MAX_HH_FAILURE_RATE:
@@ -652,6 +789,7 @@ for i, v in enumerate(filtered, 1):
         v["experience"],
         v["city"],
         "да" if v["remote"] else "нет",
+        v["source"],
         v["published_at"],
         v["score"],
         v["verdict"],
@@ -677,7 +815,7 @@ if existing_row_count > len(table_values):
     try:
         call_with_retry(
             lambda: sheet.batch_clear(
-                [f"A{len(table_values) + 1}:L{existing_row_count}"]
+                [f"A{len(table_values) + 1}:M{existing_row_count}"]
             ),
             "Очистка старых строк Google Sheets",
         )

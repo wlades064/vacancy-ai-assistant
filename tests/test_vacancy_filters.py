@@ -63,7 +63,10 @@ class CompanyAndExperienceFilterTests(unittest.TestCase):
         self.assertFalse(contains_excluded_company("Яндекс Крауд"))
 
     def test_three_to_six_year_experience_variants_are_excluded(self):
-        variants = ("3–6 лет", "3-6 лет", "от 3 до 6 лет", "от 3х до 6 лет")
+        variants = (
+            "3–6 лет", "3-6 лет", "от 3 до 6 лет", "от 3х до 6 лет",
+            "Senior", "Lead",
+        )
 
         for experience in variants:
             with self.subTest(experience=experience):

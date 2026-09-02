@@ -69,6 +69,8 @@ def contains_excluded_company(company):
 
 def is_excluded_experience(experience):
     normalized_experience = normalize_for_matching(experience)
+    if normalized_experience in {"senior", "lead"}:
+        return True
     three_to_six = re.search(
         r"(?:от\s*)?3(?:\s*[-]\s*6|\s*х?\s*до\s*6)\s*(?:лет|года)?",
         normalized_experience,
