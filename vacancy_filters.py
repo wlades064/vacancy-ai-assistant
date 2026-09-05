@@ -100,7 +100,7 @@ def deduplicate_company_titles(vacancies):
         company = normalize_for_matching(vacancy.get("company"))
         has_company = company and company != "не указана"
         key = (title, company) if has_company else (title, vacancy.get("url", index))
-        if vacancy.get("source") == "SuperJob" and has_company and key in hh_keys:
+        if vacancy.get("source") in {"SuperJob", "ArbiHunter"} and has_company and key in hh_keys:
             continue
         current_index = best_index_by_key.get(key)
         if current_index is None:
