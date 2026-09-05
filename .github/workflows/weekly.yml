@@ -36,6 +36,7 @@ jobs:
       - name: Run script
         env:
           GIGACHAT_KEY: ${{ secrets.GIGACHAT_KEY }}
+          SUPERJOB_API_KEY: ${{ secrets.SUPERJOB_API_KEY }}
           GIGACHAT_MODEL: GigaChat-2
           GIGACHAT_SCOPE: GIGACHAT_API_PERS
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

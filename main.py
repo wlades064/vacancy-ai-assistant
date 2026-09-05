@@ -16,6 +16,7 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from gigachat import GigaChat
 from habr_source import parse_habr_search_page, parse_habr_vacancy_text
+from superjob_source import collect_superjob_vacancies
 from vacancy_filters import (
     contains_excluded_company,
     contains_ai_keyword,
@@ -622,6 +623,10 @@ if HABR_ENABLED:
     if habr_pages_attempted and not habr_pages_succeeded:
         logger.warning("Habr Career недоступен, поиск продолжен только с hh.ru")
 
+all_vacancies.extend(collect_superjob_vacancies(
+    os.environ.get("SUPERJOB_API_KEY", "").strip(), search_queries, ai_search_queries,
+))
+
 print("Проверяю каждую вакансию...\n")
 
 # --- Шаг 2: фильтруем и анализируем ---
@@ -641,7 +646,7 @@ for i, v in enumerate(all_vacancies):
     if is_ai_candidate:
         ai_filter_stats["собрано"] += 1
 
-    if v["source"] == "Habr Career":
+    if v["source"] in {"Habr Career", "SuperJob"}:
         company = v["company_hint"]
         experience = v["experience_hint"]
         city = v["city_hint"]
@@ -693,6 +698,10 @@ for i, v in enumerate(all_vacancies):
             continue
         pub_date = v["pub_date_hint"]
         pub_date_str = v["published_at_hint"]
+    elif v["source"] == "SuperJob":
+        pub_date = v["pub_date_hint"]
+        pub_date_str = v["published_at_hint"]
+        vacancy_text = v["vacancy_text_hint"]
     else:
         pub_date, pub_date_str, vacancy_text = get_vacancy_date_and_text(v["url"])
 

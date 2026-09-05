@@ -89,12 +89,19 @@ def preferred_city_rank(city):
 
 def deduplicate_company_titles(vacancies):
     best_index_by_key = {}
+    hh_keys = {
+        (normalize_for_matching(v.get("title")), normalize_for_matching(v.get("company")))
+        for v in vacancies if v.get("source") == "hh.ru"
+        and normalize_for_matching(v.get("company")) not in {"", "не указана"}
+    }
 
     for index, vacancy in enumerate(vacancies):
         title = normalize_for_matching(vacancy.get("title"))
         company = normalize_for_matching(vacancy.get("company"))
         has_company = company and company != "не указана"
         key = (title, company) if has_company else (title, vacancy.get("url", index))
+        if vacancy.get("source") == "SuperJob" and has_company and key in hh_keys:
+            continue
         current_index = best_index_by_key.get(key)
         if current_index is None:
             best_index_by_key[key] = index
