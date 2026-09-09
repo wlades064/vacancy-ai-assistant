@@ -18,6 +18,7 @@ from gigachat import GigaChat
 from habr_source import parse_habr_search_page, parse_habr_vacancy_text
 from superjob_source import collect_superjob_vacancies
 from arbihunter_source import collect_arbihunter_vacancies
+from hh_source import parse_hh_details
 from vacancy_filters import (
     contains_excluded_company,
     contains_ai_keyword,
@@ -263,6 +264,8 @@ ai_search_queries = [
     "автоматизация n8n",
     "нейросети",
     "LLM",
+    "вайбкодер",
+    "vibe coder",
 ]
 
 search_queries = [*analyst_search_queries, *ai_search_queries]
@@ -277,6 +280,8 @@ habr_ai_search_queries = [
     "AI автоматизация",
     "специалист по ИИ",
     "LLM",
+    "вайбкодер",
+    "vibe coder",
 ]
 
 habr_search_queries = [*habr_analyst_search_queries, *habr_ai_search_queries]
@@ -341,29 +346,21 @@ def get_vacancy_date_and_text(url):
 def get_vacancy_details(url):
     try:
         resp = get_hh_page(url, attempts=2)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        company = ""
-        company_block = soup.find(attrs={"data-qa": "vacancy-company-name"})
-        if company_block:
-            company = company_block.get_text(" ", strip=True)
-
-        experience = ""
-        exp_block = soup.find(attrs={"data-qa": "vacancy-experience"})
-        if exp_block:
-            experience = exp_block.text.strip().lower()
-
-        city = ""
-        address_block = soup.find(attrs={"data-qa": "vacancy-address-with-map"})
-        if address_block:
-            city = address_block.text.strip().lower()
-
-        remote = False
-        format_block = soup.find(attrs={"data-qa": "work-formats-text"})
-        if format_block and is_remote_text(format_block.text):
-            remote = True
-
-        return company, experience, city, remote, True
+        details = parse_hh_details(resp.text)
+        if not details[4]:
+            driver.get(url)
+            for attempt in range(3):
+                time.sleep(1)
+                browser_details = parse_hh_details(driver.page_source)
+                company = details[0] or browser_details[0]
+                experience = (details[1] if is_excluded_experience(details[1])
+                              else browser_details[1] or details[1])
+                details = (company, experience, browser_details[2] or details[2],
+                           browser_details[3] or details[3], bool(company and experience))
+                if details[4]:
+                    break
+        logger.info("hh.ru: %s, компания=%r, опыт=%r, проверено=%s", url, details[0], details[1], details[4])
+        return details
     except Exception:
         logger.exception("Не удалось получить детали вакансии %s", url)
         return "", "", "", False, False

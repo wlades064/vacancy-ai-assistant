@@ -16,6 +16,7 @@ EXCLUDE_KEYWORDS = [
     "битрикс 24", "битрикс24", "риск", "китайск",
     "контент", "financial", "менеджер поддержки", "директолог",
     "специалист по личному бренду", "seo", "key account manager", "тувинск",
+    "qa", "банк", "теплотехник", "визуализатор", "амбассадор", "юрист", "врач", "smm", "срм",
 ]
 
 EXCLUDE_COMPANIES = ["aston", "астон"]
@@ -39,6 +40,7 @@ AI_KEYWORDS = [
     "ai-агент", "ai агент", "ai assistant", "ai specialist", "ai engineer",
     "aiops", "genai", "нейросет", "искусственн интеллект", "llm", "gpt",
     "n8n", "mcp", "rag", "machine learning",
+    "вайбкод", "vibe cod", "vibe-cod",
 ]
 
 
