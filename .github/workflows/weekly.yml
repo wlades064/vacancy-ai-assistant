@@ -2,7 +2,7 @@ name: Weekly Vacancy Search
 
 on:
   schedule:
-    - cron: '0 11 * * 1'
+    - cron: '0 4 * * 1' # Monday 08:00 Europe/Samara (UTC+4)
   workflow_dispatch:
 
 jobs:

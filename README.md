@@ -54,7 +54,7 @@ python main.py
 
 ## Автоматический запуск
 
-Workflow `.github/workflows/weekly.yml` запускает скрипт каждый понедельник в 11:00 UTC. Его также можно запустить вручную на вкладке **Actions** с помощью `workflow_dispatch`.
+Workflow `.github/workflows/weekly.yml` запускает скрипт каждый понедельник в 08:00 по Самаре (04:00 UTC). GitHub Actions может задерживать плановые запуски. Его также можно запустить вручную на вкладке **Actions** с помощью `workflow_dispatch`.
 
 ## Фильтрация
 
