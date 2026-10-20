@@ -49,6 +49,10 @@ class VacancyTitleFilterTests(unittest.TestCase):
             "SEO-специалист (AI)",
             "Key Account Manager (AI-платформа)",
             "Разметчик данных для AI / LLM (тувинский язык)",
+            "Креатор для ИИ-проектов",
+            "БЛОГЕР для AI-платформы",
+            "Куратор обучения нейросетям",
+            "Разметчик данных для AI / LLM",
         ]
 
         for title in excluded_titles:
