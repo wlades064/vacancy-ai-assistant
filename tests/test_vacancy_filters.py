@@ -53,6 +53,10 @@ class VacancyTitleFilterTests(unittest.TestCase):
             "БЛОГЕР для AI-платформы",
             "Куратор обучения нейросетям",
             "Разметчик данных для AI / LLM",
+            "Системный аналитик DWH",
+            "Продюсер ИИ-проектов",
+            "3D Artist (AI)",
+            "Сценарист для AI-платформы",
         ]
 
         for title in excluded_titles:
