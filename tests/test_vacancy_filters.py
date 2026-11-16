@@ -64,6 +64,9 @@ class VacancyTitleFilterTests(unittest.TestCase):
             "Системный аналитик — качество сервиса",
             "Бизнес-аналитик — данные и отчёты",
             "Инженер по ИИ (Python)",
+            "OSINT-аналитик",
+            "Бизнес-аналитик — закупки",
+            "AI Creator",
         ]
 
         for title in excluded_titles:
@@ -72,6 +75,10 @@ class VacancyTitleFilterTests(unittest.TestCase):
 
 
 class CompanyAndExperienceFilterTests(unittest.TestCase):
+    def test_mirapolis_company_is_excluded_in_both_scripts(self):
+        self.assertTrue(contains_excluded_company('ООО «МИРАПОЛИС»'))
+        self.assertTrue(contains_excluded_company('Mirapolis'))
+
     def test_aston_company_is_excluded_case_insensitively(self):
         self.assertTrue(contains_excluded_company("Aston"))
         self.assertTrue(contains_excluded_company("ООО АСТОН"))
