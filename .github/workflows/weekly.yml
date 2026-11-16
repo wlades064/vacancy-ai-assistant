@@ -5,6 +5,10 @@ on:
     - cron: '0 4 * * 1' # Monday 08:00 Europe/Samara (UTC+4)
   workflow_dispatch:
 
+concurrency:
+  group: weekly-vacancy-search
+  cancel-in-progress: false
+
 jobs:
   search:
     runs-on: ubuntu-latest

@@ -19,6 +19,7 @@ from habr_source import parse_habr_search_page, parse_habr_vacancy_text
 from superjob_source import collect_superjob_vacancies
 from arbihunter_source import collect_arbihunter_vacancies
 from hh_source import parse_hh_details
+from vacancy_history import exclude_seen_hh, hh_vacancy_id
 from vacancy_filters import (
     contains_excluded_company,
     contains_ai_keyword,
@@ -159,7 +160,9 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
 creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 client = gspread.authorize(creds)
-sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+spreadsheet = client.open_by_key(SPREADSHEET_ID)
+sheet = spreadsheet.sheet1
+HISTORY_SHEET = "Уже показано — HH"
 
 headers_row = ["№", "Название", "Компания", "Опыт", "Город", "Удалённо", "Источник", "Дата", "Оценка", "Вердикт", "Анализ", "Письмо", "Ссылка"]
 
@@ -720,9 +723,30 @@ for i, v in enumerate(all_vacancies):
     v["is_ai_candidate"] = is_ai_candidate
     analysis_candidates.append(v)
 
-deduplicated_candidates = deduplicate_company_titles(analysis_candidates)
+def open_history_sheet():
+    try:
+        return spreadsheet.worksheet(HISTORY_SHEET)
+    except gspread.WorksheetNotFound:
+        return spreadsheet.add_worksheet(title=HISTORY_SHEET, rows=1000, cols=1)
+
+
+history_sheet = call_with_retry(open_history_sheet, "Открытие истории hh.ru")
+history_values = call_with_retry(lambda: history_sheet.col_values(1), "Чтение истории hh.ru")
+shown_hh_ids = {value for value in history_values if re.fullmatch(r"[0-9]+", value)}
+existing_rows = call_with_retry(sheet.get_all_values, "Чтение Google Sheets")
+seed_ids = []
+if not shown_hh_ids and existing_rows and "Ссылка" in existing_rows[0]:
+    link_column = existing_rows[0].index("Ссылка")
+    seed_ids = sorted({
+        vacancy_id for row in existing_rows[1:] if len(row) > link_column
+        if (vacancy_id := hh_vacancy_id(row[link_column]))
+    })
+shown_hh_ids.update(seed_ids)
+unseen_candidates = exclude_seen_hh(analysis_candidates, shown_hh_ids)
+logger.info("Исключено повторов hh.ru по ID: %s", len(analysis_candidates) - len(unseen_candidates))
+deduplicated_candidates = deduplicate_company_titles(unseen_candidates)
 selected_urls = {vacancy["url"] for vacancy in deduplicated_candidates}
-for vacancy in analysis_candidates:
+for vacancy in unseen_candidates:
     if vacancy["url"] not in selected_urls:
         filter_stats["дубликат компании и названия"] += 1
         if vacancy["is_ai_candidate"]:
@@ -807,28 +831,29 @@ for i, v in enumerate(filtered, 1):
     ])
 
 table_values = [headers_row, *rows]
-existing_row_count = len(
-    call_with_retry(sheet.get_all_values, "Чтение Google Sheets")
-)
-call_with_retry(
-    lambda: sheet.update(
-        values=table_values,
-        range_name="A1",
-        value_input_option="RAW",
-    ),
-    "Запись Google Sheets",
-)
+def sheet_range(worksheet, cells):
+    title = worksheet.title.replace("'", "''")
+    return f"'{title}'!{cells}"
 
-if existing_row_count > len(table_values):
-    try:
-        call_with_retry(
-            lambda: sheet.batch_clear(
-                [f"A{len(table_values) + 1}:M{existing_row_count}"]
-            ),
-            "Очистка старых строк Google Sheets",
-        )
-    except Exception:
-        logger.exception("Новые данные записаны, но старые лишние строки не очищены")
+
+report_rows = table_values + [[""] * len(headers_row) for _ in range(len(existing_rows) - len(table_values))]
+updates = [{"range": sheet_range(sheet, "A1"), "values": report_rows}]
+reported_ids = [vacancy_id for v in filtered if (vacancy_id := hh_vacancy_id(v["url"]))]
+history_rows = [[vacancy_id] for vacancy_id in seed_ids + reported_ids]
+if not history_values:
+    history_rows.insert(0, ["ID вакансии hh.ru"])
+if history_rows:
+    last_row = len(history_values) + len(history_rows)
+    if last_row > history_sheet.row_count:
+        call_with_retry(lambda: history_sheet.resize(rows=last_row + 1000), "Расширение истории hh.ru")
+    updates.append({
+        "range": sheet_range(history_sheet, f"A{len(history_values) + 1}"),
+        "values": history_rows,
+    })
+call_with_retry(
+    lambda: spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": updates}),
+    "Запись отчёта и истории hh.ru",
+)
 
 print(f"Сохранено {len(filtered)} вакансий в Google Sheets")
 
