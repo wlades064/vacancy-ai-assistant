@@ -19,6 +19,7 @@ from habr_source import parse_habr_search_page, parse_habr_vacancy_text
 from superjob_source import collect_superjob_vacancies
 from arbihunter_source import collect_arbihunter_vacancies
 from hh_source import parse_hh_details
+from raberu_source import collect_raberu_vacancies
 from vacancy_history import exclude_seen_hh, hh_vacancy_id
 from vacancy_filters import (
     contains_excluded_company,
@@ -628,6 +629,7 @@ all_vacancies.extend(collect_superjob_vacancies(
     os.environ.get("SUPERJOB_API_KEY", "").strip(), search_queries, ai_search_queries,
 ))
 all_vacancies.extend(collect_arbihunter_vacancies())
+all_vacancies.extend(collect_raberu_vacancies(search_queries, ai_search_queries))
 
 print("Проверяю каждую вакансию...\n")
 
@@ -648,7 +650,7 @@ for i, v in enumerate(all_vacancies):
     if is_ai_candidate:
         ai_filter_stats["собрано"] += 1
 
-    if v["source"] in {"Habr Career", "SuperJob", "ArbiHunter"}:
+    if v["source"] in {"Habr Career", "SuperJob", "ArbiHunter", "Raberu"}:
         company = v["company_hint"]
         experience = v["experience_hint"]
         city = v["city_hint"]
@@ -700,7 +702,7 @@ for i, v in enumerate(all_vacancies):
             continue
         pub_date = v["pub_date_hint"]
         pub_date_str = v["published_at_hint"]
-    elif v["source"] in {"SuperJob", "ArbiHunter"}:
+    elif v["source"] in {"SuperJob", "ArbiHunter", "Raberu"}:
         pub_date = v["pub_date_hint"]
         pub_date_str = v["published_at_hint"]
         vacancy_text = v["vacancy_text_hint"]
