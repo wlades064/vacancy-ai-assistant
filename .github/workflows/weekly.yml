@@ -2,7 +2,7 @@ name: Weekly Vacancy Search
 
 on:
   schedule:
-    - cron: '0 5 * * *' # Daily at 08:00 Moscow time (UTC+3)
+    - cron: '7 5 * * *' # Daily at 08:07 Moscow time (UTC+3)
   workflow_dispatch:
 
 concurrency:
