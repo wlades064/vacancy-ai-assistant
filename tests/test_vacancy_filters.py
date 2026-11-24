@@ -11,6 +11,17 @@ from vacancy_filters import (
 
 
 class VacancyTitleFilterTests(unittest.TestCase):
+    def test_search_requires_a_relevant_role_or_ai_marker(self):
+        for title in ("GEO-специалист для логистической компании",
+                      "Инженер по эксплуатации (Linux)", "Кредитный аналитик",
+                      "Специалист по стратегии", "Graphic Artist"):
+            with self.subTest(title=title):
+                self.assertFalse(contains_relevant_keyword(title))
+        for title in ("Бизнес-аналитик", "Системный аналитик", "Младший аналитик",
+                      "Специалист по ИИ", "Инженер RAG", "Вайбкодер"):
+            with self.subTest(title=title):
+                self.assertTrue(contains_relevant_keyword(title))
+
     def test_requested_title_exclusions(self):
         excluded_titles = [
             "Системный аналитик (Аналитик ЦФТ)",
@@ -67,6 +78,17 @@ class VacancyTitleFilterTests(unittest.TestCase):
             "OSINT-аналитик",
             "Бизнес-аналитик — закупки",
             "AI Creator",
+            "Аналитик SOC",
+            "Специалист-аналитик изучения потребительских услуг (скалодромные комплексы)",
+            "Системный аналитик (SDD)",
+            "Инженер по эксплуатации (Linux)",
+            "Аналитик по ценообразованию",
+            "Нутрициолог по обучению нейросетей",
+            "Специалист обучения нейросетей",
+            "GEO-специалист для логистической компании",
+            "Антифрод",
+            "Специалист отдела контроля качества (удаленно, использование ИИ)",
+            "AI Artist / Generative Artist",
         ]
 
         for title in excluded_titles:

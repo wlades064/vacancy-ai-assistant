@@ -20,7 +20,7 @@ from superjob_source import collect_superjob_vacancies
 from arbihunter_source import collect_arbihunter_vacancies
 from hh_source import parse_hh_details
 from raberu_source import collect_raberu_vacancies
-from vacancy_history import exclude_seen_hh, hh_vacancy_id
+from vacancy_history import exclude_seen_vacancies, vacancy_history_key
 from vacancy_filters import (
     contains_excluded_company,
     contains_ai_keyword,
@@ -646,6 +646,9 @@ ai_filter_stats = Counter()
 week_ago = datetime.now() - timedelta(days=7)
 
 for i, v in enumerate(all_vacancies):
+    if contains_excluded_keyword(v["title"]) or not contains_relevant_keyword(v["title"]):
+        filter_stats["неподходящее название"] += 1
+        continue
     is_ai_candidate = v["matched_ai_query"] or contains_ai_keyword(v["title"])
     if is_ai_candidate:
         ai_filter_stats["собрано"] += 1
@@ -734,18 +737,18 @@ def open_history_sheet():
 
 history_sheet = call_with_retry(open_history_sheet, "Открытие истории hh.ru")
 history_values = call_with_retry(lambda: history_sheet.col_values(1), "Чтение истории hh.ru")
-shown_hh_ids = {value for value in history_values if re.fullmatch(r"[0-9]+", value)}
+shown_ids = set(history_values)
 existing_rows = call_with_retry(sheet.get_all_values, "Чтение Google Sheets")
 seed_ids = []
-if not shown_hh_ids and existing_rows and "Ссылка" in existing_rows[0]:
+if existing_rows and "Ссылка" in existing_rows[0]:
     link_column = existing_rows[0].index("Ссылка")
     seed_ids = sorted({
         vacancy_id for row in existing_rows[1:] if len(row) > link_column
-        if (vacancy_id := hh_vacancy_id(row[link_column]))
-    })
-shown_hh_ids.update(seed_ids)
-unseen_candidates = exclude_seen_hh(analysis_candidates, shown_hh_ids)
-logger.info("Исключено повторов hh.ru по ID: %s", len(analysis_candidates) - len(unseen_candidates))
+        if (vacancy_id := vacancy_history_key(row[link_column]))
+    } - shown_ids)
+shown_ids.update(seed_ids)
+unseen_candidates = exclude_seen_vacancies(analysis_candidates, shown_ids)
+logger.info("Исключено уже показанных вакансий: %s", len(analysis_candidates) - len(unseen_candidates))
 deduplicated_candidates = deduplicate_company_titles(unseen_candidates)
 selected_urls = {vacancy["url"] for vacancy in deduplicated_candidates}
 for vacancy in unseen_candidates:
@@ -840,10 +843,10 @@ def sheet_range(worksheet, cells):
 
 report_rows = table_values + [[""] * len(headers_row) for _ in range(len(existing_rows) - len(table_values))]
 updates = [{"range": sheet_range(sheet, "A1"), "values": report_rows}]
-reported_ids = [vacancy_id for v in filtered if (vacancy_id := hh_vacancy_id(v["url"]))]
+reported_ids = [vacancy_id for v in filtered if (vacancy_id := vacancy_history_key(v["url"]))]
 history_rows = [[vacancy_id] for vacancy_id in seed_ids + reported_ids]
 if not history_values:
-    history_rows.insert(0, ["ID вакансии hh.ru"])
+    history_rows.insert(0, ["ID вакансии"])
 if history_rows:
     last_row = len(history_values) + len(history_rows)
     if last_row > history_sheet.row_count:

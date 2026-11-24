@@ -21,6 +21,11 @@ EXCLUDE_KEYWORDS = [
     "dwh", "продюсер", "3d", "сценарист",
     "исходящие звонки", "привлечение", "редактор", "копирайтер", "качество", "данные", "python",
     "osint", "закупки", "creator",
+    "аналитик soc", "специалист-аналитик изучения потребительских услуг",
+    "системный аналитик (sdd)", "инженер по эксплуатации (linux)",
+    "аналитик по ценообразованию", "нутрициолог по обучению нейросетей",
+    "обучения нейросетей", "geo-специалист для логистической компании",
+    "антифрод", "контроля качества", "ai artist", "generative artist",
 ]
 
 EXCLUDE_COMPANIES = ["aston", "астон", "мираполис", "mirapolis"]
@@ -37,13 +42,15 @@ MOSCOW_OR_SAMARA_TIME_CITIES = [
 ]
 
 RELEVANT_KEYWORDS = [
-    "аналитик", "analyst", "автоматизац", "automation", "ai-агент", "ии",
+    "бизнес-аналитик", "бизнес аналитик", "системный аналитик",
+    "бизнес/системный аналитик", "бизнес-системный аналитик",
+    "business analyst", "system analyst", "systems analyst",
+    "автоматизац", "automation",
 ]
 
 AI_KEYWORDS = [
     "ai-агент", "ai агент", "ai assistant", "ai specialist", "ai engineer",
-    "aiops", "genai", "нейросет", "искусственн интеллект", "llm", "gpt",
-    "n8n", "mcp", "rag", "machine learning",
+    "aiops", "genai", "нейросет", "машинное обучение", "machine learning",
     "вайбкод", "vibe cod", "vibe-cod",
 ]
 
@@ -125,12 +132,18 @@ def contains_ai_keyword(title):
     normalized_title = normalize_for_matching(title)
     if any(keyword in normalized_title for keyword in AI_KEYWORDS):
         return True
-    return bool(re.search(r"(?<![a-zа-я0-9])(?:ai|ml)(?![a-zа-я0-9])", normalized_title))
+    return bool(re.search(
+        r"\b(?:ai|ии|ml|llm|gpt|n8n|mcp|rag)\b|\bискусственн\w* интеллект",
+        normalized_title,
+    ))
 
 
 def contains_relevant_keyword(title):
     normalized_title = normalize_for_matching(title)
-    return contains_ai_keyword(title) or any(
+    return contains_ai_keyword(title) or bool(re.search(
+        r"\b(?:junior|младший|начинающий)[ -]+(?:аналитик|analyst)\b|^аналитик$",
+        normalized_title,
+    )) or any(
         normalize_for_matching(keyword) in normalized_title
         for keyword in RELEVANT_KEYWORDS
     )
