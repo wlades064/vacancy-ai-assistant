@@ -1,9 +1,16 @@
 import unittest
 
-from vacancy_history import exclude_seen_vacancies, vacancy_history_key
+from vacancy_history import exclude_seen_vacancies, vacancy_history_key, vacancy_history_keys
 
 
 class VacancyHistoryTests(unittest.TestCase):
+    def test_previous_report_blocks_republication_but_preserves_other_companies(self):
+        previous = vacancy_history_keys("https://hh.ru/vacancy/100", "Бизнес-аналитик", "Компания")
+        duplicate = {"url": "https://career.habr.com/vacancies/200",
+                     "title": "БИЗНЕС–АНАЛИТИК", "company": "компания"}
+        other = dict(duplicate, company="Другой работодатель")
+        self.assertEqual(exclude_seen_vacancies([duplicate, other], previous), [other])
+
     def test_previous_report_blocks_repeat_on_every_source(self):
         pairs = [
             ("https://hh.ru/vacancy/123", "https://saratov.hh.ru/vacancy/123"),

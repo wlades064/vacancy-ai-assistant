@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import re
 from collections import Counter
 import requests
 from bs4 import BeautifulSoup
@@ -20,7 +19,8 @@ from superjob_source import collect_superjob_vacancies
 from arbihunter_source import collect_arbihunter_vacancies
 from hh_source import parse_hh_details
 from raberu_source import collect_raberu_vacancies
-from vacancy_history import exclude_seen_vacancies, vacancy_history_key
+from vacancy_history import exclude_seen_vacancies, vacancy_history_keys
+from vacancy_scoring import extract_score_and_verdict
 from vacancy_filters import (
     contains_excluded_company,
     contains_ai_keyword,
@@ -419,23 +419,6 @@ def generate_letter(giga, title, vacancy_text):
         return f"Ошибка письма: {e}"
 
 
-def extract_score_and_verdict(analysis_text):
-    score = ""
-    verdict = ""
-    for line in analysis_text.split("\n"):
-        if "ОБЩАЯ ОЦЕНКА" in line.upper() and "%" in line:
-            import re
-            nums = re.findall(r'\d+', line)
-            if nums:
-                score = nums[0] + "%"
-        if "ВЕРДИКТ" in line.upper():
-            if "ДА" in line.upper():
-                verdict = "ДА"
-            elif "НЕТ" in line.upper():
-                verdict = "НЕТ"
-    return score, verdict
-
-
 # --- Шаг 1: собираем вакансии ---
 giga = GigaChat(
     credentials=GIGACHAT_KEY,
@@ -742,9 +725,15 @@ existing_rows = call_with_retry(sheet.get_all_values, "Чтение Google Sheet
 seed_ids = []
 if existing_rows and "Ссылка" in existing_rows[0]:
     link_column = existing_rows[0].index("Ссылка")
+    title_column = existing_rows[0].index("Название") if "Название" in existing_rows[0] else None
+    company_column = existing_rows[0].index("Компания") if "Компания" in existing_rows[0] else None
     seed_ids = sorted({
-        vacancy_id for row in existing_rows[1:] if len(row) > link_column
-        if (vacancy_id := vacancy_history_key(row[link_column]))
+        key for row in existing_rows[1:] if len(row) > link_column
+        for key in vacancy_history_keys(
+            row[link_column],
+            row[title_column] if title_column is not None and title_column < len(row) else "",
+            row[company_column] if company_column is not None and company_column < len(row) else "",
+        )
     } - shown_ids)
 shown_ids.update(seed_ids)
 unseen_candidates = exclude_seen_vacancies(analysis_candidates, shown_ids)
@@ -762,22 +751,27 @@ for i, v in enumerate(deduplicated_candidates):
 
     vacancy_text = v.pop("vacancy_text")
     analysis = analyze_vacancy(giga, v["title"], vacancy_text)
-    if analysis.startswith("Ошибка анализа:"):
-        analysis_failures += 1
     score, verdict = extract_score_and_verdict(analysis)
+    filter_stats["передано в анализ"] += 1
+    if v.pop("is_ai_candidate"):
+        ai_filter_stats["передано в анализ"] += 1
+    if score is None:
+        analysis_failures += 1
+        filter_stats["нет корректной оценки"] += 1
+        continue
+    if score < 75:
+        filter_stats["оценка ниже 75%"] += 1
+        continue
 
     letter = ""
     if verdict == "ДА":
         letter = generate_letter(giga, v["title"], vacancy_text)
 
-    v["score"] = score
+    v["score"] = f"{score}%"
     v["verdict"] = verdict
     v["analysis"] = analysis
     v["letter"] = letter
     filtered.append(v)
-    filter_stats["передано в анализ"] += 1
-    if v.pop("is_ai_candidate"):
-        ai_filter_stats["передано в анализ"] += 1
 
     if (i + 1) % 10 == 0:
         print(f"  Обработано {i + 1}/{len(deduplicated_candidates)}...")
@@ -805,7 +799,7 @@ if details_failure_rate > MAX_HH_FAILURE_RATE:
         "Google Sheets оставлена без изменений."
     )
 
-if filtered and analysis_failures == len(filtered):
+if deduplicated_candidates and analysis_failures == len(deduplicated_candidates):
     raise RuntimeError(
         "GigaChat не смог проанализировать ни одной вакансии. "
         "Google Sheets оставлена без изменений; смотрите ошибки выше."
@@ -843,8 +837,8 @@ def sheet_range(worksheet, cells):
 
 report_rows = table_values + [[""] * len(headers_row) for _ in range(len(existing_rows) - len(table_values))]
 updates = [{"range": sheet_range(sheet, "A1"), "values": report_rows}]
-reported_ids = [vacancy_id for v in filtered if (vacancy_id := vacancy_history_key(v["url"]))]
-history_rows = [[vacancy_id] for vacancy_id in seed_ids + reported_ids]
+reported_ids = {key for v in filtered for key in vacancy_history_keys(v["url"], v["title"], v["company"])}
+history_rows = [[key] for key in sorted(set(seed_ids) | (reported_ids - shown_ids))]
 if not history_values:
     history_rows.insert(0, ["ID вакансии"])
 if history_rows:

@@ -89,6 +89,9 @@ class VacancyTitleFilterTests(unittest.TestCase):
             "Антифрод",
             "Специалист отдела контроля качества (удаленно, использование ИИ)",
             "AI Artist / Generative Artist",
+            "Backend Developer (LLM)",
+            "Founding Sales — AI",
+            "Ассистент по поиску идей для AI-видео",
         ]
 
         for title in excluded_titles:

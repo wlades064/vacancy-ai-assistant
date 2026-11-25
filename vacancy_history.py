@@ -1,5 +1,9 @@
 import re
+import hashlib
+import json
 from urllib.parse import urlsplit
+
+from vacancy_filters import normalize_for_matching
 
 
 def hh_vacancy_id(url):
@@ -39,14 +43,28 @@ def vacancy_history_key(url):
     return None
 
 
+def vacancy_history_keys(url, title="", company=""):
+    keys = set()
+    if key := vacancy_history_key(url):
+        keys.add(key)
+    title = normalize_for_matching(title)
+    company = normalize_for_matching(company)
+    if title and company not in {"", "не указана", "nda", "не указан"}:
+        pair = json.dumps([company, title], ensure_ascii=False).encode("utf-8")
+        keys.add("company-title:" + hashlib.sha256(pair).hexdigest())
+    return keys
+
+
 def exclude_seen_vacancies(vacancies, shown_ids):
-    seen = set(shown_ids)
+    seen_ids = set()
     selected = []
     for vacancy in vacancies:
-        vacancy_id = vacancy_history_key(vacancy["url"])
-        if vacancy_id is not None:
-            if vacancy_id in seen:
-                continue
-            seen.add(vacancy_id)
+        url = vacancy["url"]
+        keys = vacancy_history_keys(url, vacancy.get("title"), vacancy.get("company"))
+        vacancy_id = vacancy_history_key(url)
+        if keys & shown_ids or (vacancy_id and vacancy_id in seen_ids):
+            continue
+        if vacancy_id:
+            seen_ids.add(vacancy_id)
         selected.append(vacancy)
     return selected

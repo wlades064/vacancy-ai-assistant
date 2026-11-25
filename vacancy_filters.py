@@ -26,6 +26,7 @@ EXCLUDE_KEYWORDS = [
     "аналитик по ценообразованию", "нутрициолог по обучению нейросетей",
     "обучения нейросетей", "geo-специалист для логистической компании",
     "антифрод", "контроля качества", "ai artist", "generative artist",
+    "backend developer", "founding sales", "ассистент по поиску идей для ai",
 ]
 
 EXCLUDE_COMPANIES = ["aston", "астон", "мираполис", "mirapolis"]
