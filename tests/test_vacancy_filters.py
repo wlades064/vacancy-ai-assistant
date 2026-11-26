@@ -11,6 +11,12 @@ from vacancy_filters import (
 
 
 class VacancyTitleFilterTests(unittest.TestCase):
+    def test_project_manager_titles_are_eligible(self):
+        for title in ("Проджект менеджер", "Проджект‑менеджер", "Project Manager", "Менеджер проектов"):
+            with self.subTest(title=title):
+                self.assertTrue(contains_relevant_keyword(title))
+                self.assertFalse(contains_excluded_keyword(title))
+
     def test_search_requires_a_relevant_role_or_ai_marker(self):
         for title in ("GEO-специалист для логистической компании",
                       "Инженер по эксплуатации (Linux)", "Кредитный аналитик",

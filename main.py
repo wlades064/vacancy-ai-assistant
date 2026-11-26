@@ -272,7 +272,8 @@ ai_search_queries = [
     "vibe coder",
 ]
 
-search_queries = [*analyst_search_queries, *ai_search_queries]
+project_search_queries = ["проджект менеджер", "менеджер проектов", "project manager"]
+search_queries = [*analyst_search_queries, *ai_search_queries, *project_search_queries]
 
 habr_analyst_search_queries = [
     "бизнес аналитик",
@@ -288,7 +289,7 @@ habr_ai_search_queries = [
     "vibe coder",
 ]
 
-habr_search_queries = [*habr_analyst_search_queries, *habr_ai_search_queries]
+habr_search_queries = [*habr_analyst_search_queries, *habr_ai_search_queries, *project_search_queries]
 
 local_cities = ["саратов", "энгельс"]
 
