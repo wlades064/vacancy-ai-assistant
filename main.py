@@ -812,8 +812,13 @@ filtered.sort(key=lambda x: x["pub_date"] or datetime.min, reverse=True)
 print(f"\nПодходящих вакансий: {len(filtered)}\n")
 
 # --- Шаг 4: сохранение в Google Sheets ---
+report_snapshot = call_with_retry(
+    lambda: sheet.get_all_values(value_render_option="FORMULA"),
+    "Проверка последней строки отчёта",
+)
+report_start = len(report_snapshot) + 1
 rows = []
-for i, v in enumerate(filtered, 1):
+for i, v in enumerate(filtered, max(1, report_start - 1)):
     rows.append([
         i,
         v["title"],
@@ -830,14 +835,18 @@ for i, v in enumerate(filtered, 1):
         v["url"]
     ])
 
-table_values = [headers_row, *rows]
 def sheet_range(worksheet, cells):
     title = worksheet.title.replace("'", "''")
     return f"'{title}'!{cells}"
 
 
-report_rows = table_values + [[""] * len(headers_row) for _ in range(len(existing_rows) - len(table_values))]
-updates = [{"range": sheet_range(sheet, "A1"), "values": report_rows}]
+report_rows = rows if report_snapshot else [headers_row, *rows]
+updates = []
+if report_rows:
+    last_report_row = report_start + len(report_rows) - 1
+    if last_report_row > sheet.row_count:
+        call_with_retry(lambda: sheet.resize(rows=last_report_row + 1000), "Расширение отчёта")
+    updates.append({"range": sheet_range(sheet, f"A{report_start}"), "values": report_rows})
 reported_ids = {key for v in filtered for key in vacancy_history_keys(v["url"], v["title"], v["company"])}
 history_rows = [[key] for key in sorted(set(seed_ids) | (reported_ids - shown_ids))]
 if not history_values:
@@ -850,10 +859,11 @@ if history_rows:
         "range": sheet_range(history_sheet, f"A{len(history_values) + 1}"),
         "values": history_rows,
     })
-call_with_retry(
-    lambda: spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": updates}),
-    "Запись отчёта и истории hh.ru",
-)
+if updates:
+    call_with_retry(
+        lambda: spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": updates}),
+        "Дополнение отчёта и истории вакансий",
+    )
 
 print(f"Сохранено {len(filtered)} вакансий в Google Sheets")
 
